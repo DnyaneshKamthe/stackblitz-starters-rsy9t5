@@ -24,26 +24,39 @@ async function getAllTickets() {
 }
 
 async function getTicketDetails(ticketData) {
-  const customer = await getTicketCustomers(ticketData.id);
-  const agent = await getTicketAgents(ticketData.id);
-  
-  return {
-    ...ticketData.dataValues,
-    customer,
-    agent,
-  };
+  try {
+    const [customer, agent] = await Promise.all([
+      getTicketCustomers(ticketData.id),
+      getTicketAgents(ticketData.id)
+    ]);
+
+    // console.log("Customer data fetched:", customer);
+    // console.log("Agent data fetched:", agent);
+
+    return {
+      ...ticketData.dataValues,
+      customer,
+      agent,
+    };
+  } catch (err) {
+    console.error("Error fetching ticket details:", err.message);
+    throw err;
+  }
 }
+
+
 
 // Helper function to get ticket's associated customers
 async function getTicketCustomers(ticketId) {
- 
   const ticketCustomers = await ticketCustomer.findAll({
     where: { ticketId },
   });
-   console.log("ticketCustomers", ticketCustomers)
+  if(ticketCustomers.length === 0) {
+    res.status(400).json({message : "No Customers found for this ticketId"})
+  }
   let customerData;
   for (let cus of ticketCustomers) {
-    console.log(cus)
+    // console.log(cus)
     customerData = await customer.findOne(
       { 
         where: { id: cus.customerId },
@@ -60,6 +73,9 @@ async function getTicketAgents(ticketId) {
   const ticketAgents = await ticketAgent.findAll({
     where: { ticketId },
   });
+  if(ticketAgents.length === 0) {
+    res.status(400).json({message : "No Agents found for this ticketId"})
+  }
   let agentData;
   for (let ag of ticketAgents) {
     agentData = await agent.findOne({ where: { id: ag.agentId } });
@@ -69,9 +85,11 @@ async function getTicketAgents(ticketId) {
 
 async function getTicketData(ticketId){
   let result = await ticket.findOne({
-    where : { id : ticketId }
+    where : { id : ticketId },
+    attributes : {exclude : ['customerId', 'agentId']}
   })
   let ticketData = await getTicketDetails(result);
+  // console.log("result",result, ticketData)
   return { ticket : ticketData }; 
 }
 
@@ -220,13 +238,101 @@ app.post("/tickets/new", async (req, res) =>{
   }
 })
 
-// app.post("/tickets/update/:id", async (res,res) => {
-//   try{
+app.post("/tickets/update/:id", async (req, res) => {
+  try {
+    const ticketId = req.params.id;
     
-//   }catch(err){
-//     res.status(500).json({ message: err.message })
-//   }
-// })
+    // Find the ticket using id
+    const ticketDetails = await ticket.findByPk(ticketId);
+    
+    // If no ticket found
+    if (!ticketDetails) {
+      return res.status(400).json({ message: "No such ticket found with this id" });
+    }
+
+    // Destructure request body to get data
+    const { title, description, status, priority, customerId, agentId } = req.body;
+
+   
+
+    // Prepare the updated ticket data
+    const updatedTicket = {};
+    // Check for each field in request body and add it to the update object if present
+    if (title) updatedTicket.title = title;
+    if (description) updatedTicket.description = description;
+    if (status) updatedTicket.status = status;
+    if (priority) updatedTicket.priority = priority;
+
+
+    // Update the ticket details
+    await ticket.update(updatedTicket, { where: { id: ticketId } });
+   
+
+    // Handle customerId updates
+    if (customerId) {
+      // Delete old customer-ticket association and create a new one
+      await ticketCustomer.destroy({ where: { ticketId } });
+      await ticketCustomer.create({ ticketId, customerId });
+    }
+
+    // Handle agentId updates
+    if (agentId) {
+      // Delete old agent-ticket association and create a new one
+      await ticketAgent.destroy({ where: { ticketId } });
+      await ticketAgent.create({ ticketId, agentId });
+    }
+    // Fetch updated ticket details
+    const updatedTicketDetails = await getTicketData(ticketId);
+
+    return res.status(200).json(updatedTicketDetails);
+
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.get("/ticketCustomer/:id", async (req, res) => {
+  try {
+    const ticketId = req.params.id;
+
+    // Find all records where ticketId matches
+    const results = await ticketCustomer.findAll({
+      where: { ticketId }
+    });
+
+    console.log(results);
+    
+    // If no results found, return a 404
+    if (results.length === 0) {
+      return res.status(404).json({ message: "No customers found for this ticket ID" });
+    }
+
+    res.status(200).json(results);
+  } catch (error) {
+    console.error("Error fetching ticket customers:", error.message);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.post("/tickets/delete", async (req, res) => {
+  try {
+    const  ticketId  = req.body.id; // Use req.params to get ticketId from the URL
+    // Delete the ticket and related records
+    await ticket.destroy({ where: { id: ticketId } });
+    await ticketCustomer.destroy({ where: { ticketId } });
+    await ticketAgent.destroy({ where: { ticketId } });
+
+    // Send a success response with the actual ticketId
+    res.status(200).json({ message: `Ticket with ID ${ticketId} deleted successfully.` });
+
+  } catch (error) {
+    // Handle errors and respond with a 500 status code
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+
+
 
 app.listen(PORT, () => {
   console.log(`Server is running on ${PORT}`);
